@@ -65,7 +65,7 @@ Schema `cutline.project/1` (see `src/shared/manifest.ts`): project id and name, 
 
 ### Lock
 
-Opening a project writes `.cutline/lock`. A second Cutline server refuses to open a project whose lock holder is still running (it can take it over only when asked to explicitly). A lock left by a process that has exited is taken over silently. Locks are released on close and when the server exits.
+Opening a project writes `.cutline/lock`. A second Cutline server refuses to open a project whose lock holder is still running (it can take it over only when asked to explicitly). A lock left by a process that has exited is taken over silently. Once another server takes over, every further write from the original server is refused and the project is closed there. Locks are released on close and when the server exits, but only if still held by that server.
 
 ## Security
 
