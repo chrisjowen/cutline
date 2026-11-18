@@ -65,6 +65,25 @@ describe("project lock", () => {
     expect(await exists(lockPath(root))).toBe(false);
   });
 
+  it("releaseSync removes only its own lock, matching release()", async () => {
+    const root = await tempDir();
+    const mine = await acquireLock(root, me);
+    await acquireLock(root, other, { force: true });
+    mine.releaseSync();
+    expect(await exists(lockPath(root))).toBe(true);
+    const theirs = await acquireLock(root, other);
+    theirs.releaseSync();
+    expect(await exists(lockPath(root))).toBe(false);
+  });
+
+  it("reports isHeld() false once another server has taken over the lock", async () => {
+    const root = await tempDir();
+    const mine = await acquireLock(root, me);
+    expect(await mine.isHeld()).toBe(true);
+    await acquireLock(root, other, { force: true });
+    expect(await mine.isHeld()).toBe(false);
+  });
+
   it("detects whether a process is alive", () => {
     expect(processAlive(process.pid)).toBe(true);
     expect(processAlive(2 ** 22 + 12345)).toBe(false);

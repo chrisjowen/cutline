@@ -21,6 +21,7 @@ import { projectId } from "../shared/ids.js";
 import { applyPatch, PatchError, type PatchOp } from "../shared/patch.js";
 import { HttpError } from "./errors.js";
 import { atomicWriteJson, exists } from "./fsutil.js";
+import { LockLostError } from "./lock.js";
 
 export const SNAPSHOT_LIMIT = 50;
 const SNAPSHOT_RE = /^cutline\.(\d+)\.json$/;
@@ -67,7 +68,13 @@ export function snapshotDir(root: string): string {
   return join(root, ".cutline", "snapshots");
 }
 
-export class ManifestStore extends EventEmitter<{ change: [ManifestChange] }> {
+export interface ManifestStoreOptions {
+  snapshotLimit?: number;
+  /** Checked before every write; a write is refused once this reports false (the lock was taken over). */
+  checkLock?: () => Promise<boolean>;
+}
+
+export class ManifestStore extends EventEmitter<{ change: [ManifestChange]; "lock-lost": [] }> {
   private current: Manifest;
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -75,6 +82,7 @@ export class ManifestStore extends EventEmitter<{ change: [ManifestChange] }> {
     readonly root: string,
     manifest: Manifest,
     private readonly snapshotLimit: number,
+    private readonly checkLock?: () => Promise<boolean>,
   ) {
     super();
     this.current = manifest;
@@ -84,7 +92,7 @@ export class ManifestStore extends EventEmitter<{ change: [ManifestChange] }> {
   static async create(
     root: string,
     init: { name: string; id?: string; now?: Date },
-    options: { snapshotLimit?: number } = {},
+    options: ManifestStoreOptions = {},
   ): Promise<ManifestStore> {
     if (await exists(manifestPath(root))) {
       throw new HttpError(409, "already-project", `${root} already contains ${MANIFEST_FILE}`);
@@ -92,11 +100,11 @@ export class ManifestStore extends EventEmitter<{ change: [ManifestChange] }> {
     const manifest = validate(newManifest({ id: init.id ?? projectId(), name: init.name, now: init.now }));
     await mkdir(snapshotDir(root), { recursive: true });
     await atomicWriteJson(manifestPath(root), manifest);
-    return new ManifestStore(root, manifest, options.snapshotLimit ?? SNAPSHOT_LIMIT);
+    return new ManifestStore(root, manifest, options.snapshotLimit ?? SNAPSHOT_LIMIT, options.checkLock);
   }
 
   /** Loads an existing cutline.json, refusing unknown or newer schema versions. */
-  static async open(root: string, options: { snapshotLimit?: number } = {}): Promise<ManifestStore> {
+  static async open(root: string, options: ManifestStoreOptions = {}): Promise<ManifestStore> {
     const path = manifestPath(root);
     // A leftover tmp file means a write was interrupted before its rename;
     // cutline.json itself is still the last complete revision.
@@ -119,7 +127,7 @@ export class ManifestStore extends EventEmitter<{ change: [ManifestChange] }> {
     }
     const manifest = validate(raw);
     await mkdir(snapshotDir(root), { recursive: true });
-    return new ManifestStore(root, manifest, options.snapshotLimit ?? SNAPSHOT_LIMIT);
+    return new ManifestStore(root, manifest, options.snapshotLimit ?? SNAPSHOT_LIMIT, options.checkLock);
   }
 
   get manifest(): Manifest {
@@ -191,6 +199,10 @@ export class ManifestStore extends EventEmitter<{ change: [ManifestChange] }> {
   }
 
   private async commit(next: Manifest): Promise<Manifest> {
+    if (this.checkLock && !(await this.checkLock())) {
+      this.emit("lock-lost");
+      throw new LockLostError();
+    }
     const previous = this.current;
     const written: Manifest = {
       ...next,

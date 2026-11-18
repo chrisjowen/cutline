@@ -1,7 +1,7 @@
 // .cutline/lock stops two Cutline servers from editing one project at once.
 // It holds the pid and port of the server that owns the project. A lock whose
 // process has gone away is stale and is taken over silently.
-import { unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { HttpError } from "./errors.js";
@@ -26,6 +26,13 @@ export class LockedError extends HttpError {
     super(423, "locked", `this project is open in another Cutline (pid ${holder.pid}, port ${holder.port})`, {
       holder,
     });
+  }
+}
+
+/** Thrown when a write is refused because another server has taken over the project's lock. */
+export class LockLostError extends HttpError {
+  constructor() {
+    super(409, "lock-lost", "another Cutline server has taken over this project; it has been closed here");
   }
 }
 
@@ -58,6 +65,12 @@ export class ProjectLock {
     readonly info: LockInfo,
   ) {}
 
+  /** True while the lock file on disk still names this instance as holder. */
+  async isHeld(): Promise<boolean> {
+    const holder = await readLock(this.path).catch(() => null);
+    return holder?.instance === this.info.instance;
+  }
+
   /** Removes the lock file if it is still ours. */
   async release(): Promise<void> {
     if (this.released) return;
@@ -75,9 +88,10 @@ export class ProjectLock {
     if (this.released) return;
     this.released = true;
     try {
-      unlinkSync(this.path);
+      const holder = JSON.parse(readFileSync(this.path, "utf8")) as Partial<LockInfo>;
+      if (holder.instance === this.info.instance) unlinkSync(this.path);
     } catch {
-      // Already gone.
+      // Already gone or unreadable.
     }
   }
 }

@@ -93,7 +93,7 @@ export class ProjectRegistry {
     const root = await realpath(target);
     const lock = await acquireLock(root, this.options.owner, { isAlive: this.options.isAlive });
     try {
-      const store = await ManifestStore.create(root, { name });
+      const store = await ManifestStore.create(root, { name }, { checkLock: () => lock.isHeld() });
       return await this.register(root, store, lock);
     } catch (error) {
       await lock.release();
@@ -130,7 +130,7 @@ export class ProjectRegistry {
       isAlive: this.options.isAlive,
     });
     try {
-      const store = await ManifestStore.open(root);
+      const store = await ManifestStore.open(root, { checkLock: () => lock.isHeld() });
       return await this.register(root, store, lock);
     } catch (error) {
       await lock.release();
@@ -173,6 +173,7 @@ export class ProjectRegistry {
         void this.options.config.renameRecent(root, name).catch(() => {});
       }
     });
+    store.on("lock-lost", () => void this.close(id));
     await this.touch(project);
     return project;
   }

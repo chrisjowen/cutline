@@ -180,6 +180,33 @@ describe("projects API", () => {
     expect((await api(second, "POST", "/api/projects/open", { path: project.root })).status).toBe(200);
   });
 
+  it("stops a taken-over server from writing, and closes the project there", async () => {
+    const home = (await testServer()).home;
+    const first = await testServer({ home });
+    const project = await create(first, { name: "Takeover" });
+    const second = await testServer({ home });
+    const taken = await api(second, "POST", "/api/projects/open", { path: project.root, force: true });
+    expect(taken.status).toBe(200);
+
+    const write = await api(first, "PATCH", `/api/p/${project.id}/manifest`, {
+      baseRev: 1,
+      ops: [{ op: "replace", path: "/name", value: "Clobbered" }],
+    });
+    expect(write.status).toBe(409);
+    expect(write.json().error).toMatchObject({ code: "lock-lost" });
+    expect((await readFile(join(project.root, "cutline.json"), "utf8")).includes("Clobbered")).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await api(first, "GET", "/api/projects/open")).json()).toEqual({ projects: [] });
+    expect((await api(first, "GET", `/api/p/${project.id}/manifest`)).status).toBe(404);
+
+    const bySecond = await api(second, "PATCH", `/api/p/${project.id}/manifest`, {
+      baseRev: 1,
+      ops: [{ op: "replace", path: "/name", value: "Second owns it" }],
+    });
+    expect(bySecond.status).toBe(200);
+  });
+
   it("uses the injected native picker and reports when there is none", async () => {
     const chosen = await testServer({ picker: async () => ({ path: "/Users/someone/Movies" }) });
     expect((await api(chosen, "POST", "/api/pick", { kind: "folder" })).json()).toEqual({

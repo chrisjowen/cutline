@@ -180,4 +180,17 @@ describe("ManifestStore", () => {
     expect(error).toBeInstanceOf(HttpError);
     expect(error).toMatchObject({ status: 404, code: "not-a-project" });
   });
+
+  it("refuses to write once checkLock reports the lock was taken over, and emits lock-lost", async () => {
+    const root = await tempDir();
+    let held = true;
+    const store = await ManifestStore.create(root, { name: "Demo" }, { checkLock: () => Promise.resolve(held) });
+    const lost: unknown[] = [];
+    store.on("lock-lost", () => lost.push(true));
+    held = false;
+    await expect(rename(store, "Clobber")).rejects.toMatchObject({ code: "lock-lost", status: 409 });
+    expect(lost).toHaveLength(1);
+    expect(store.rev).toBe(1);
+    expect((await readManifest(root)).rev).toBe(1);
+  });
 });
